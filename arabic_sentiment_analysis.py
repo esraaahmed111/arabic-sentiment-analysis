@@ -32,8 +32,6 @@ print(f" GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else '
 
 # Load Data
 df = pd.read_csv('arabic_sentiment.csv')
-print(f"\nDataset shape : {df.shape}")
-print(df['sentiment'].value_counts())
 
 
 # EDA

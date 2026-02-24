@@ -1,4 +1,4 @@
-# Import Libraries
+# Import libraries
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,7 +30,7 @@ print(f" Device: {DEVICE}")
 print(f" GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None'}")
 
 
-# Load Data
+# Load data
 df = pd.read_csv('arabic_sentiment.csv')
 
 
@@ -91,7 +91,7 @@ def plot_confusion_matrix(y_true, y_pred, classes, title):
     plt.show()
 
 
-#  Model 1 TF-IDF + Logistic Regression
+# Model 1 TF-IDF + Logistic Regression
 print("\n" + "="*55)
 print("MODEL 1: TF-IDF + Logistic Regression")
 print("="*55)
@@ -113,7 +113,7 @@ plot_confusion_matrix(y_test, y_pred_lr, le.classes_,
                       'Confusion Matrix — TF-IDF + Logistic Regression')
 
 
-#  Model 2 Bidirectional LSTM
+# Model 2 Bidirectional LSTM
 print("\n" + "="*55)
 print("MODEL 2: Bidirectional LSTM")
 print("="*55)
@@ -217,7 +217,7 @@ print(classification_report(y_test, y_pred_lstm, target_names=le.classes_))
 plot_confusion_matrix(y_test, y_pred_lstm, le.classes_, 'Confusion Matrix — BiLSTM')
 
 
-#  Model 3 AraBERT
+# Model 3 AraBERT
 print("\n" + "="*55)
 print("MODEL 3: AraBERT")
 print("="*55)
@@ -313,7 +313,7 @@ print(classification_report(list(yb_test), y_pred_bert, target_names=le.classes_
 plot_confusion_matrix(list(yb_test), y_pred_bert, le.classes_, 'Confusion Matrix — AraBERT')
 
 
-# Models Comparison
+# Model Comparison
 models = ['TF-IDF + LogReg', 'BiLSTM', 'AraBERT']
 accs   = [acc_lr*100, acc_lstm*100, acc_bert*100]
 

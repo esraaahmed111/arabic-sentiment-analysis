@@ -5,12 +5,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import re
 from tqdm import tqdm
+from collections import Counter
 
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
 
 import torch
 import torch.nn as nn
@@ -27,59 +29,88 @@ import warnings
 warnings.filterwarnings('ignore')
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f" Device: {DEVICE}")
-print(f" GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None'}")
+print(f' Device: {DEVICE}')
+print(f' GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None"}')
 
 
 # Load data
-df = pd.read_csv('arabic_sentiment.csv')
+df = pd.read_csv('arb_sentiment.csv')
+
+df = df.rename(columns={'review_description': 'text', 'rating': 'sentiment'})
+df = df[['text', 'sentiment', 'company']]
 
 
 # EDA
+label_names = {1: 'Positive', -1: 'Negative', 0: 'Neutral'}
+df['sentiment_label'] = df['sentiment'].map(label_names)
+
+print('Sentiment distribution:')
+print(df['sentiment_label'].value_counts())
+
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-df['sentiment'].value_counts().plot(
-    kind='bar', ax=axes[0],
-    color=['#2ecc71', '#e74c3c', '#3498db'])
-axes[0].set_title('Sentiment Count')
+df['sentiment_label'].value_counts().plot(
+    kind='bar', ax=axes[0], color=['#2ecc71', '#e74c3c', '#3498db'])
+axes[0].set_title('Sentiment Count', fontsize=13)
 axes[0].tick_params(axis='x', rotation=0)
 
-df['sentiment'].value_counts().plot(
+df['sentiment_label'].value_counts().plot(
     kind='pie', ax=axes[1], autopct='%1.1f%%',
     colors=['#2ecc71', '#e74c3c', '#3498db'])
-axes[1].set_title('Sentiment %')
+axes[1].set_title('Sentiment %', fontsize=13)
 axes[1].set_ylabel('')
+plt.tight_layout()
+plt.show()
+
+# Reviews per company
+plt.figure(figsize=(12, 4))
+df['company'].value_counts().plot(kind='bar', color='#3498db', edgecolor='black')
+plt.title('Reviews per Company', fontsize=13)
+plt.ylabel('Count')
+plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
 plt.show()
 
 
 # Preprocessing
 df = df.dropna(subset=['text', 'sentiment'])
-print(f"\nAfter cleaning: {df.shape}")
+print(f'After dropping nulls: {df.shape}')
 
 def clean_arabic_text(text):
     text = str(text)
-    text = re.sub(r'http\S+', '', text)           # remove URLs
-    text = re.sub(r'@\w+', '', text)              # remove mentions
-    text = re.sub(r'#\w+', '', text)              # remove hashtags
-    text = re.sub(r'[a-zA-Z]', '', text)          # remove English letters
-    text = re.sub(r'\d+', '', text)               # remove numbers
-    text = re.sub(r'[^\w\s\u0600-\u06FF]', '', text)  # keep Arabic only
+    text = re.sub(r'http\S+', '', text)
+    text = re.sub(r'@\w+', '', text)
+    text = re.sub(r'#\w+', '', text)
+    text = re.sub(r'[a-zA-Z]', '', text)
+    text = re.sub(r'\d+', '', text)
+    text = re.sub(r'[^\w\s\u0600-\u06FF]', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 df['clean_text'] = df['text'].apply(clean_arabic_text)
 df = df[df['clean_text'].str.strip() != '']
+print(f'After removing empty texts: {df.shape}')
+df[['text', 'clean_text', 'sentiment_label']].head()
 
+
+# Label Encoding & Train/Test Split
 le = LabelEncoder()
 df['label'] = le.fit_transform(df['sentiment'])
-print("Label mapping:", dict(zip(le.classes_, range(len(le.classes_)))))
+readable_names = ['Negative', 'Neutral', 'Positive']
+print('Label mapping:', dict(zip(le.classes_, range(len(le.classes_)))))
 
 X_train, X_test, y_train, y_test = train_test_split(
     df['clean_text'], df['label'],
     test_size=0.2, random_state=42, stratify=df['label'])
 
-print(f"Train: {len(X_train):,}  |  Test: {len(X_test):,}")
+print(f'Train: {len(X_train):,}  |  Test: {len(X_test):,}')
 
+# Class weights to handle imbalance (Neutral is only ~5%)
+class_weights = compute_class_weight(
+    class_weight='balanced', classes=np.unique(y_train), y=y_train)
+class_weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(DEVICE)
+print(f'Class weights: {dict(zip(readable_names, class_weights.round(3)))}')
+
+# Confusion Matrix
 def plot_confusion_matrix(y_true, y_pred, classes, title):
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(7, 5))
@@ -101,16 +132,18 @@ tfidf = TfidfVectorizer(max_features=10000, ngram_range=(1, 2),
                         min_df=2, analyzer='char_wb')
 X_train_tfidf = tfidf.fit_transform(X_train)
 X_test_tfidf  = tfidf.transform(X_test)
+print(f'TF-IDF matrix shape: {X_train_tfidf.shape}')
 
-lr_model = LogisticRegression(max_iter=500, C=1.0, random_state=42)
+lr_model = LogisticRegression(max_iter=500, C=1.0, random_state=42,
+                               class_weight='balanced')
 lr_model.fit(X_train_tfidf, y_train)
 
 y_pred_lr = lr_model.predict(X_test_tfidf)
 acc_lr    = accuracy_score(y_test, y_pred_lr)
 
-print(f"\n Accuracy: {acc_lr*100:.2f}%")
-print(classification_report(y_test, y_pred_lr, target_names=le.classes_))
-plot_confusion_matrix(y_test, y_pred_lr, le.classes_,
+print(f'\nAccuracy: {acc_lr*100:.2f}%\n')
+print(classification_report(y_test, y_pred_lr, target_names=readable_names))
+plot_confusion_matrix(y_test, y_pred_lr, readable_names,
                       'Confusion Matrix — TF-IDF + Logistic Regression')
 
 
@@ -120,7 +153,6 @@ print("MODEL 2: Bidirectional LSTM")
 print("="*55)
 
 def build_vocab(texts, max_vocab=10000):
-    from collections import Counter
     counter = Counter()
     for text in texts:
         counter.update(text.split())
@@ -131,6 +163,7 @@ def build_vocab(texts, max_vocab=10000):
 
 vocab   = build_vocab(X_train)
 MAX_LEN = 50
+print(f'Vocabulary size: {len(vocab):,}')
 
 def text_to_seq(text, vocab, max_len=MAX_LEN):
     tokens = text.split()[:max_len]
@@ -140,6 +173,8 @@ def text_to_seq(text, vocab, max_len=MAX_LEN):
 
 X_train_seq = np.array([text_to_seq(t, vocab) for t in X_train])
 X_test_seq  = np.array([text_to_seq(t, vocab) for t in X_test])
+print(f'Sequence shape — Train: {X_train_seq.shape} | Test: {X_test_seq.shape}')
+
 
 class TweetDataset(Dataset):
     def __init__(self, sequences, labels):
@@ -155,6 +190,8 @@ train_loader = DataLoader(TweetDataset(X_train_seq, y_train),
 test_loader  = DataLoader(TweetDataset(X_test_seq, y_test),
                           batch_size=BATCH,
                           pin_memory=torch.cuda.is_available())
+print(f'Train batches: {len(train_loader)} | Test batches: {len(test_loader)}')
+
 
 class LSTMSentiment(nn.Module):
     def __init__(self, vocab_size, embed_dim, hidden_dim, num_classes, dropout=0.3):
@@ -171,10 +208,12 @@ class LSTMSentiment(nn.Module):
         hidden        = torch.cat((hidden[-2], hidden[-1]), dim=1)
         return self.fc(self.dropout(hidden))
 
-NUM_CLASSES = len(le.classes_)
+NUM_CLASSES = len(le.classes_)  # 3
 lstm_model  = LSTMSentiment(len(vocab), 128, 256, NUM_CLASSES).to(DEVICE)
-criterion   = nn.CrossEntropyLoss()
+criterion   = nn.CrossEntropyLoss(weight=class_weights_tensor)
 optimizer   = torch.optim.Adam(lstm_model.parameters(), lr=1e-3)
+print(lstm_model)
+
 
 def run_epoch(model, loader, optimizer=None):
     is_train = optimizer is not None
@@ -203,19 +242,22 @@ for ep in range(1, EPOCHS + 1):
     _,       vl_acc, _ = run_epoch(lstm_model, test_loader)
     train_losses.append(tr_loss)
     val_accs.append(vl_acc)
-    print(f"Ep {ep}/{EPOCHS} | loss {tr_loss:.4f} | train {tr_acc:.4f} | val {vl_acc:.4f}")
+    print(f'Ep {ep}/{EPOCHS} | loss {tr_loss:.4f} | train {tr_acc:.4f} | val {vl_acc:.4f}')
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 axes[0].plot(train_losses, marker='o', color='#e74c3c')
 axes[0].set_title('LSTM Train Loss')
-axes[1].plot(val_accs,    marker='o', color='#2ecc71')
+axes[0].set_xlabel('Epoch')
+axes[1].plot(val_accs, marker='o', color='#2ecc71')
 axes[1].set_title('LSTM Val Accuracy')
-plt.tight_layout(); plt.show()
+axes[1].set_xlabel('Epoch')
+plt.tight_layout()
+plt.show()
 
 _, acc_lstm, y_pred_lstm = run_epoch(lstm_model, test_loader)
-print(f"\n LSTM Accuracy: {acc_lstm*100:.2f}%")
-print(classification_report(y_test, y_pred_lstm, target_names=le.classes_))
-plot_confusion_matrix(y_test, y_pred_lstm, le.classes_, 'Confusion Matrix — BiLSTM')
+print(f'\nLSTM Accuracy: {acc_lstm*100:.2f}%\n')
+print(classification_report(y_test, y_pred_lstm, target_names=readable_names))
+plot_confusion_matrix(y_test, y_pred_lstm, readable_names, 'Confusion Matrix — BiLSTM')
 
 
 # Model 3 AraBERT
@@ -229,13 +271,19 @@ BERT_BATCH    = 32
 BERT_EPOCHS   = 3
 BERT_LR       = 2e-5
 
-TRAIN_N, TEST_N = 10000, 2000
-Xb_train = X_train.head(TRAIN_N).reset_index(drop=True)
-yb_train = y_train.head(TRAIN_N).reset_index(drop=True)
-Xb_test  = X_test.head(TEST_N).reset_index(drop=True)
-yb_test  = y_test.head(TEST_N).reset_index(drop=True)
+TRAIN_N = min(30000, len(X_train))
+TEST_N  = min(8000,  len(X_test))
 
-tokenizer  = AutoTokenizer.from_pretrained(ARABERT_MODEL)
+Xb_train = X_train.iloc[:TRAIN_N].reset_index(drop=True)
+yb_train = y_train.iloc[:TRAIN_N].reset_index(drop=True)
+Xb_test  = X_test.iloc[:TEST_N].reset_index(drop=True)
+yb_test  = y_test.iloc[:TEST_N].reset_index(drop=True)
+
+print(f'AraBERT train size: {len(Xb_train):,} | test size: {len(Xb_test):,}')
+
+tokenizer = AutoTokenizer.from_pretrained(ARABERT_MODEL)
+print('Tokenizer loaded.')
+
 
 class ArabertDataset(Dataset):
     def __init__(self, texts, labels):
@@ -257,30 +305,37 @@ bert_train_loader = DataLoader(ArabertDataset(Xb_train, yb_train),
 bert_test_loader  = DataLoader(ArabertDataset(Xb_test, yb_test),
                                 batch_size=BERT_BATCH,
                                 pin_memory=torch.cuda.is_available())
+print(f'Train batches: {len(bert_train_loader)} | Test batches: {len(bert_test_loader)}')
 
-bert_model  = AutoModelForSequenceClassification.from_pretrained(
-                  ARABERT_MODEL, num_labels=NUM_CLASSES).to(DEVICE)
 
-optimizer_b = AdamW(bert_model.parameters(), lr=BERT_LR, eps=1e-8)
-total_steps = len(bert_train_loader) * BERT_EPOCHS
-scheduler   = get_linear_schedule_with_warmup(optimizer_b,
-                  num_warmup_steps=total_steps // 10,
-                  num_training_steps=total_steps)
+bert_model = AutoModelForSequenceClassification.from_pretrained(
+                 ARABERT_MODEL, num_labels=NUM_CLASSES).to(DEVICE)
+
+bert_criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+optimizer_b    = AdamW(bert_model.parameters(), lr=BERT_LR, eps=1e-8)
+total_steps    = len(bert_train_loader) * BERT_EPOCHS
+scheduler      = get_linear_schedule_with_warmup(
+                     optimizer_b,
+                     num_warmup_steps=total_steps // 10,
+                     num_training_steps=total_steps)
+print('AraBERT model ready.')
+
 
 def bert_train_epoch(model, loader):
     model.train()
     total_loss, total_correct = 0, 0
-    for batch in tqdm(loader, desc="Training", leave=False):
+    for batch in tqdm(loader, desc='Training', leave=False):
         ids  = batch['input_ids'].to(DEVICE)
         mask = batch['attention_mask'].to(DEVICE)
         labs = batch['label'].to(DEVICE)
         optimizer_b.zero_grad()
-        out  = model(ids, attention_mask=mask, labels=labs)
-        out.loss.backward()
+        out  = model(ids, attention_mask=mask)
+        loss = bert_criterion(out.logits, labs)
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer_b.step()
         scheduler.step()
-        total_loss    += out.loss.item()
+        total_loss    += loss.item()
         total_correct += (out.logits.argmax(1) == labs).sum().item()
     return total_loss/len(loader), total_correct/len(loader.dataset)
 
@@ -298,20 +353,20 @@ def bert_eval(model, loader):
             preds_all.extend(p.cpu().numpy())
     return total_correct/len(loader.dataset), preds_all
 
-print("Training AraBERT...\n")
+print('Training AraBERT...\n')
 for ep in range(1, BERT_EPOCHS + 1):
     tr_loss, tr_acc = bert_train_epoch(bert_model, bert_train_loader)
     vl_acc, _       = bert_eval(bert_model, bert_test_loader)
-    print(f"Ep {ep}/{BERT_EPOCHS} | loss {tr_loss:.4f} | train {tr_acc:.4f} | val {vl_acc:.4f}")
+    print(f'Ep {ep}/{BERT_EPOCHS} | loss {tr_loss:.4f} | train {tr_acc:.4f} | val {vl_acc:.4f}')
 
 bert_model.save_pretrained('./arabert_sentiment')
 tokenizer.save_pretrained('./arabert_sentiment')
-print(" AraBERT model saved to ./arabert_sentiment")
+print('AraBERT model saved to ./arabert_sentiment\n')
 
 acc_bert, y_pred_bert = bert_eval(bert_model, bert_test_loader)
-print(f"\n AraBERT Accuracy: {acc_bert*100:.2f}%")
-print(classification_report(list(yb_test), y_pred_bert, target_names=le.classes_))
-plot_confusion_matrix(list(yb_test), y_pred_bert, le.classes_, 'Confusion Matrix — AraBERT')
+print(f'AraBERT Accuracy: {acc_bert*100:.2f}%\n')
+print(classification_report(list(yb_test), y_pred_bert, target_names=readable_names))
+plot_confusion_matrix(list(yb_test), y_pred_bert, readable_names, 'Confusion Matrix — AraBERT')
 
 
 # Model Comparison
@@ -330,11 +385,11 @@ plt.ylabel('Accuracy (%)')
 plt.tight_layout()
 plt.show()
 
-print("\n Final Results")
-print("-"*35)
+print('\n Final Results')
+print('-'*35)
 for m, a in zip(models, accs):
-    print(f"  {m:<22}: {a:.2f}%")
-print(f"\n Best: {models[accs.index(max(accs))]} ({max(accs):.2f}%)")
+    print(f'  {m:<22}: {a:.2f}%')
+print(f'\n Best: {models[accs.index(max(accs))]} ({max(accs):.2f}%)')
 
 
 # Inference
@@ -365,9 +420,11 @@ def predict_arabert(text):
 
 
 sample_texts = [
-    "هذا المنتج رائع جداً وأنصح به الجميع",
-    "تجربة سيئة جداً ولن أشتري من هذا المتجر مرة أخرى",
-    "المنتج وصل في الوقت المحدد وهو مقبول",
+    "التطبيق رائع جداً وسهل الاستخدام وأنصح به الجميع",
+    "تجربة سيئة جداً والتطبيق لا يعمل ولن أستخدمه مرة أخرى",
+    "التطبيق مقبول ويؤدي الغرض أحياناً",
+    "خدمة ممتازة والتوصيل كان سريع جداً شكراً",
+    "أسوأ تجربة في حياتي المنتج لا يساوي شيء",
 ]
 
 print("\n Live Predictions\n" + "="*65)

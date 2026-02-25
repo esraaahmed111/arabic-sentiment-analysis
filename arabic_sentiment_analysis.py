@@ -61,15 +61,6 @@ axes[1].set_ylabel('')
 plt.tight_layout()
 plt.show()
 
-# Reviews per company
-plt.figure(figsize=(12, 4))
-df['company'].value_counts().plot(kind='bar', color='#3498db', edgecolor='black')
-plt.title('Reviews per Company', fontsize=13)
-plt.ylabel('Count')
-plt.xticks(rotation=45, ha='right')
-plt.tight_layout()
-plt.show()
-
 
 # Preprocessing
 df = df.dropna(subset=['text', 'sentiment'])
@@ -124,10 +115,6 @@ def plot_confusion_matrix(y_true, y_pred, classes, title):
 
 
 # Model 1 TF-IDF + Logistic Regression
-print("\n" + "="*55)
-print("MODEL 1: TF-IDF + Logistic Regression")
-print("="*55)
-
 tfidf = TfidfVectorizer(max_features=10000, ngram_range=(1, 2),
                         min_df=2, analyzer='char_wb')
 X_train_tfidf = tfidf.fit_transform(X_train)
@@ -148,10 +135,6 @@ plot_confusion_matrix(y_test, y_pred_lr, readable_names,
 
 
 # Model 2 Bidirectional LSTM
-print("\n" + "="*55)
-print("MODEL 2: Bidirectional LSTM")
-print("="*55)
-
 def build_vocab(texts, max_vocab=10000):
     counter = Counter()
     for text in texts:
@@ -261,10 +244,6 @@ plot_confusion_matrix(y_test, y_pred_lstm, readable_names, 'Confusion Matrix —
 
 
 # Model 3 AraBERT
-print("\n" + "="*55)
-print("MODEL 3: AraBERT")
-print("="*55)
-
 ARABERT_MODEL = 'aubmindlab/bert-base-arabertv02'
 BERT_MAX_LEN  = 64
 BERT_BATCH    = 32
